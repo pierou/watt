@@ -631,6 +631,8 @@ struct PowerGraph: View {
 struct AppFooterView: View {
     @ObservedObject var powerMonitor: PowerMonitorService
     @Binding var route: PanelRoute
+    @Environment(\.openWindow) private var openWindow
+    @AppStorage(WattSettings.pinnedPanel) private var pinnedPanel = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -640,6 +642,14 @@ struct AppFooterView: View {
                     .frame(width: 20, height: 20)
             }
             .glassControl()
+
+            Button(action: togglePin) {
+                Image(systemName: pinnedPanel ? "pin.fill" : "pin")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 20, height: 20)
+            }
+            .glassControl()
+            .help(pinnedPanel ? "Unpin panel" : "Pin panel to a floating window")
 
             Spacer()
 
@@ -667,6 +677,16 @@ struct AppFooterView: View {
         .padding(.horizontal, 14)
         .padding(.top, 6)
         .padding(.bottom, 10)
+    }
+
+    private func togglePin() {
+        if pinnedPanel {
+            pinnedPanel = false
+            WattWindows.closePanel()
+        } else {
+            pinnedPanel = true
+            WattWindows.focusPanel(openWindow)
+        }
     }
 }
 

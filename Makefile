@@ -104,6 +104,20 @@ install: release
 	@cp -R $(RELEASE_APP_PATH) /Applications/
 	@echo "Installed to /Applications/$(PROJECT_NAME).app"
 
+# Local install: ad-hoc signed (project.yml default), no git push / tag / GitHub release
+install-local: setup
+	@echo "Building $(PROJECT_NAME) (local, ad-hoc signed)..."
+	@mkdir -p $(BUILD_DIR)
+	@xcodebuild -project $(PROJECT_NAME).xcodeproj \
+		-scheme $(SCHEME) \
+		-configuration Release \
+		-derivedDataPath $(DERIVED_DATA) \
+		-quiet \
+		build
+	@rm -rf /Applications/$(PROJECT_NAME).app
+	@cp -R $(RELEASE_APP_PATH) /Applications/
+	@echo "Installed to /Applications/$(PROJECT_NAME).app"
+
 uninstall:
 	@echo "Removing $(PROJECT_NAME) from /Applications..."
 	@rm -rf /Applications/$(PROJECT_NAME).app
@@ -136,7 +150,8 @@ help:
 	@echo "  open          Build and open the app bundle"
 	@echo "  run-release   Build and run release version"
 	@echo "  clean         Remove build artifacts and generated project"
-	@echo "  install       Install release build to /Applications"
+	@echo "  install       Install release build to /Applications (full release flow)"
+	@echo "  install-local Install to /Applications (ad-hoc, no push/tag/release)"
 	@echo "  uninstall     Remove from /Applications"
 	@echo "  xcode         Open project in Xcode"
 	@echo "  help          Show this help message"
