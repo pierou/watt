@@ -1,4 +1,4 @@
-.PHONY: all setup build run clean install release help
+.PHONY: all setup build test run clean install install-local release help
 
 PROJECT_NAME = Watt
 SCHEME = Watt
@@ -73,6 +73,17 @@ release: setup
 		git push -f && \
 		echo "Pushed homebrew update to remote"
 
+test: setup
+	@echo "Running tests..."
+	@mkdir -p $(BUILD_DIR)
+	@xcodebuild -project $(PROJECT_NAME).xcodeproj \
+		-scheme $(SCHEME) \
+		-configuration Debug \
+		-derivedDataPath $(DERIVED_DATA) \
+		-destination "platform=macOS,arch=arm64" \
+		-only-testing:$(PROJECT_NAME)Tests \
+		test 2>&1 | tail -30
+
 run: build
 	@$(EXECUTABLE)
 
@@ -119,6 +130,7 @@ help:
 	@echo "Targets:"
 	@echo "  setup         Generate Xcode project with XcodeGen"
 	@echo "  build         Build the app (debug configuration)"
+	@echo "  test          Run the unit tests"
 	@echo "  release       Build release, package zip, update homebrew"
 	@echo "  run           Build and run the executable directly"
 	@echo "  open          Build and open the app bundle"
