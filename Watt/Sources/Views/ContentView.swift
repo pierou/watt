@@ -95,6 +95,9 @@ struct ContentView: View {
                     SystemMetricsSection(metricsService: systemMetrics)
                     PowerFlowSection(powerMonitor: powerMonitor)
                     BatterySection(powerMonitor: powerMonitor)
+                    if powerMonitor.tariff.isTimeOfUse {
+                        RateSection(powerMonitor: powerMonitor)
+                    }
                     HistorySection(powerMonitor: powerMonitor)
                 }
                 .padding(.horizontal, 14)
@@ -517,7 +520,7 @@ struct HistorySection: View {
                     StatColumn(
                         items: [
                             ("Rate", formatBatteryRate(powerMonitor.batteryRatePerMinute), powerMonitor.batteryRatePerMinute >= 0 ? .green : .orange),
-                            ("", String(format: "%.1f¢/hr", powerMonitor.costPerHour * 100), .red)
+                            ("", Money.minor(powerMonitor.costPerHour, powerMonitor.currency) + "/hr", .red)
                         ]
                     )
 
@@ -528,7 +531,7 @@ struct HistorySection: View {
                     StatColumn(
                         items: [
                             ("Today", formatEnergy(powerMonitor.todayEnergyUsed), nil),
-                            ("", String(format: "%.1f¢", powerMonitor.todayCost * 100), nil)
+                            ("", Money.minor(powerMonitor.todayCost, powerMonitor.currency), nil)
                         ]
                     )
 
@@ -539,7 +542,7 @@ struct HistorySection: View {
                     StatColumn(
                         items: [
                             ("Lifetime", formatEnergy(powerMonitor.lifetimeEnergyUsed), nil),
-                            ("", String(format: "%.1f¢", powerMonitor.lifetimeCost * 100), nil)
+                            ("", Money.minor(powerMonitor.lifetimeCost, powerMonitor.currency), nil)
                         ]
                     )
                 }
@@ -689,7 +692,6 @@ struct SettingsView: View {
     @ObservedObject var powerMonitor: PowerMonitorService
     @ObservedObject var daemon = PowerMetricsDaemon.shared
     var onBack: () -> Void
-    @State private var costInput: String = ""
     @State private var zipCodeInput: String = ""
     @State private var showResetConfirmation: Bool = false
     @State private var showUninstallConfirmation: Bool = false
@@ -700,44 +702,7 @@ struct SettingsView: View {
             InlinePanelHeader(title: "Settings", onBack: onBack)
 
             VStack(alignment: .leading, spacing: 18) {
-                SettingsSection(title: "Electricity Cost") {
-                    HStack(spacing: 8) {
-                        HStack(spacing: 3) {
-                            Text("$")
-                                .foregroundStyle(.secondary)
-                            TextField("0.120", text: $costInput)
-                                .textFieldStyle(.plain)
-                                .frame(width: 52)
-                                .onSubmit { applyCost() }
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(Color(nsColor: .textBackgroundColor))
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .stroke(Color.primary.opacity(0.12), lineWidth: 1)
-                        )
-
-                        Text("per kWh")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-
-                        Spacer()
-
-                        Button("Apply") { applyCost() }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                    }
-
-                    HStack(spacing: 4) {
-                        Text("Current:")
-                            .foregroundStyle(.secondary)
-                        Text("$\(String(format: "%.3f", powerMonitor.electricityCostPerKwh))/kWh")
-                            .foregroundStyle(.green)
-                    }
-                    .font(.system(size: 11, weight: .medium))
-                }
+                TariffSettingsSection(powerMonitor: powerMonitor)
 
                 SettingsSection(title: "Auto-detect Rate") {
                     HStack(spacing: 8) {
@@ -747,9 +712,6 @@ struct SettingsView: View {
 
                         Button("Lookup") {
                             powerMonitor.setZipCode(zipCodeInput)
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                costInput = String(format: "%.3f", powerMonitor.electricityCostPerKwh)
-                            }
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -865,14 +827,7 @@ struct SettingsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .onAppear {
-            costInput = String(format: "%.3f", powerMonitor.electricityCostPerKwh)
             zipCodeInput = powerMonitor.zipCode
-        }
-    }
-
-    private func applyCost() {
-        if let cost = Double(costInput), cost > 0 {
-            powerMonitor.setElectricityCost(cost)
         }
     }
 }
