@@ -13,6 +13,10 @@ struct TariffWindow: Equatable, Hashable {
         guard parts.count == 2, let start = TariffWindow.minute(of: parts[0]), let end = TariffWindow.minute(of: parts[1]) else {
             return nil
         }
+        // A window that starts and ends at the same reading wraps past midnight and so
+        // covers every minute of the day: "06:00-06:00" would put the whole day off-peak
+        // and silently halve what the panel says the day cost. Refuse the typo.
+        guard start != end else { return nil }
         startMinute = start
         endMinute = end
     }
@@ -33,11 +37,16 @@ struct TariffWindow: Equatable, Hashable {
     }
 
     /// Minutes from local midnight at which this window starts or stops.
+    /// Kept for the schedule display; transitions are found by asking the calendar.
     var boundaries: [Int] { [startMinute, endMinute] }
 
     private static func minute(of clock: String) -> Int? {
         let parts = clock.split(separator: ":", maxSplits: 1).map { Int($0) }
-        guard parts.count == 2, let h = parts[0], let m = parts[1], (0...23).contains(h), (0...59).contains(m) else { return nil }
+        guard parts.count == 2, let h = parts[0], let m = parts[1] else { return nil }
+        // "22:00-24:00" is how the end of a night window is written on a contract, so 24:00
+        // is accepted as midnight — the only 24-hour form allowed, and it round-trips.
+        if h == 24 { return m == 0 ? 1440 : nil }
+        guard (0...23).contains(h), (0...59).contains(m) else { return nil }
         return h * 60 + m
     }
 
@@ -82,19 +91,27 @@ struct Tariff: Equatable {
 
     // MARK: Transitions
 
-    /// When the current rate stops applying, i.e. the next window boundary.
+    /// When the current rate stops applying: the first minute-granularity instant after
+    /// `date` at which the band differs from the band `date` is in.
+    ///
+    /// Deliberately a scan rather than boundary arithmetic. A boundary is a wall-clock
+    /// reading, and on a changeover day a reading either does not exist (Paris skips
+    /// 02:00-03:00 on 2026-03-29, so a window ending at 02:30 ends at the jump) or exists
+    /// twice (02:00-03:00 repeats on 2026-10-25, and the first pass is the one that ends
+    /// the window). Both answers fall out of asking the calendar what the clock reads at
+    /// each step; neither falls out of adding `(boundary - now)` absolute minutes to a
+    /// number, which is what an earlier version here did and was an hour wrong twice a
+    /// year. Cost is bounded by the length of the current band, worst case ~1500 steps of
+    /// date arithmetic, and it runs once per label render.
     func nextTransition(from date: Date = Date(), calendar: Calendar = .current) -> Date? {
         guard isTimeOfUse, !offPeakWindows.isEmpty else { return nil }
+        let bandNow = isOffPeak(at: date, calendar: calendar)
 
-        let now = minuteOfDay(date)
-        let bandNow = contains(now)
-        let boundaries = Array(Set(offPeakWindows.flatMap { $0.boundaries })).sorted()
-
-        // Look at each boundary today, then tomorrow, for the first one that flips the band.
-        for candidate in boundaries + boundaries.map({ $0 + 1440 }) {
-            if candidate > now && contains(candidate % 1440) != bandNow {
-                return calendar.date(byAdding: .minute, value: candidate - now, to: truncateToMinute(date, calendar: calendar))
-            }
+        var probe = date
+        for _ in 0..<1500 {
+            guard let next = calendar.date(byAdding: .minute, value: 1, to: probe) else { return nil }
+            probe = next
+            if isOffPeak(at: probe, calendar: calendar) != bandNow { return probe }
         }
         return nil
     }
@@ -134,33 +151,5 @@ struct Tariff: Equatable {
     private func minuteOfDay(_ date: Date, calendar: Calendar = .current) -> Int {
         let c = calendar.dateComponents([.hour, .minute], from: date)
         return (c.hour ?? 0) * 60 + (c.minute ?? 0)
-    }
-
-    private func truncateToMinute(_ date: Date, calendar: Calendar = .current) -> Date {
-        calendar.date(bySetting: .second, value: 0, of: date) ?? date
-    }
-}
-
-/// Display currency for money figures. The minor unit is what the narrow stat columns show.
-enum Currency: String, CaseIterable, Codable {
-    case usd, eur, gbp, cad, sek
-
-    var symbol: String {
-        switch self {
-        case .usd: return "$"
-        case .eur: return "€"
-        case .gbp: return "£"
-        case .cad: return "C$"
-        case .sek: return "kr"
-        }
-    }
-
-    var minorSymbol: String {
-        switch self {
-        case .usd, .cad: return "¢"
-        case .eur: return "c"
-        case .gbp: return "p"
-        case .sek: return "ö"
-        }
     }
 }

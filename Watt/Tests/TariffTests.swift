@@ -74,23 +74,26 @@ final class TariffTests: XCTestCase {
         XCTAssertFalse(t.isOffPeak(at: date(10, 21, 59)))
     }
 
+    /// A window covering the whole day has no boundary to advertise. It is written
+    /// `00:00-24:00`; the degenerate `00:00-00:00` form used to be how this test said it,
+    /// which is the same string as the typo `06:00-06:00` — so it now means "invalid".
     func testAllDayWindow() {
         var t = Tariff()
         t.mode = .peakOffPeak
-        t.offPeakWindows = Tariff.parseWindows("00:00-00:00")!
+        t.offPeakWindows = Tariff.parseWindows("00:00-24:00")!
         XCTAssertTrue(t.isOffPeak(at: date(10, 13, 0)))
-        XCTAssertNil(t.nextTransition(from: date(10, 13, 0)))
+        XCTAssertNil(t.nextTransition(from: date(10, 13, 0), calendar: paris))
     }
 
     // MARK: Transitions
 
     func testNextTransitionLandsOnTheRightBoundary() {
         let t = twoBand()
-        XCTAssertEqual(clock(t.nextTransition(from: date(10, 10, 0))), "10-14:50")
-        XCTAssertEqual(clock(t.nextTransition(from: date(10, 15, 0))), "10-16:50")
-        XCTAssertEqual(clock(t.nextTransition(from: date(10, 3, 0))), "10-06:50")
+        XCTAssertEqual(clock(t.nextTransition(from: date(10, 10, 0), calendar: paris)), "10-14:50")
+        XCTAssertEqual(clock(t.nextTransition(from: date(10, 15, 0), calendar: paris)), "10-16:50")
+        XCTAssertEqual(clock(t.nextTransition(from: date(10, 3, 0), calendar: paris)), "10-06:50")
         // Late evening has to roll over into the next day's window.
-        XCTAssertEqual(clock(t.nextTransition(from: date(10, 23, 0))), "11-00:50")
+        XCTAssertEqual(clock(t.nextTransition(from: date(10, 23, 0), calendar: paris)), "11-00:50")
     }
 
     /// No schedule means no transitions to advertise, rather than a bogus "until 00:00".
@@ -98,7 +101,7 @@ final class TariffTests: XCTestCase {
         var t = Tariff()
         t.mode = .peakOffPeak
         t.offPeakWindows = []
-        XCTAssertNil(t.nextTransition(from: date(10, 3, 0)))
+        XCTAssertNil(t.nextTransition(from: date(10, 3, 0), calendar: paris))
     }
 
     // MARK: Daylight saving
@@ -177,6 +180,110 @@ final class TariffTests: XCTestCase {
         XCTAssertFalse(t.isTimeOfUse)
         XCTAssertFalse(t.isOffPeak(at: date(10, 3, 0)))
         XCTAssertEqual(t.rate(at: date(10, 3, 0)), t.peakRate, accuracy: 0.0001)
+    }
+
+    // MARK: Transition instants are wall-clock
+
+    /// A boundary is a clock reading. The answer must be that reading, not
+    /// `from + (boundaryMinute - nowMinute)` in absolute minutes: on a changeover day
+    /// those two differ by the DST offset, and the label the user sees is a clock time.
+    func testTransitionLandsOnTheWallClockBoundary() {
+        var t = Tariff()
+        t.mode = .peakOffPeak
+        t.offPeakWindows = Tariff.parseWindows("22:00-06:00")!
+
+        let from = date(10, 10, 0)
+        guard let next = t.nextTransition(from: from, calendar: paris) else {
+            return XCTFail("expected a transition to 22:00")
+        }
+        let c = paris.dateComponents([.hour, .minute], from: next)
+        XCTAssertEqual(c.hour, 22); XCTAssertEqual(c.minute, 0)
+        XCTAssertEqual(next.timeIntervalSince(from) / 60, 720, accuracy: 0.5)
+    }
+
+    /// 2026-03-29: Paris jumps 02:00 -> 03:00, so an off-peak window ending at 02:30 ends
+    /// when the clock jumps. Absolute-minute arithmetic answers 03:30 instead.
+    func testTransitionOnSpringForwardDayEndsAtTheClockJump() {
+        var t = Tariff()
+        t.mode = .peakOffPeak
+        t.offPeakWindows = Tariff.parseWindows("00:00-02:30")!
+
+        let from = date(29, 0, 5, month: 3)
+        guard let next = t.nextTransition(from: from, calendar: paris) else {
+            return XCTFail("expected the band to end on the gap")
+        }
+        let c = paris.dateComponents([.hour, .minute], from: next)
+        XCTAssertEqual([c.hour, c.minute], [3, 0], "the window ends when the clock reaches 03:00")
+        XCTAssertEqual(next.timeIntervalSince(from) / 60, 115, accuracy: 0.5)
+    }
+
+    /// 2026-10-25: Paris repeats 02:00-03:00. The first pass of 02:30 is the end of the
+    /// window; answering with the repeated one would bill an extra hour as off-peak.
+    func testTransitionOnFallBackDayUsesTheFirstPass() {
+        var t = Tariff()
+        t.mode = .peakOffPeak
+        t.offPeakWindows = Tariff.parseWindows("00:00-02:30")!
+
+        let from = date(25, 0, 5, month: 10)
+        guard let next = t.nextTransition(from: from, calendar: paris) else {
+            return XCTFail("expected a transition at 02:30")
+        }
+        let c = paris.dateComponents([.hour, .minute], from: next)
+        XCTAssertEqual([c.hour, c.minute], [2, 30])
+        XCTAssertEqual(next.timeIntervalSince(from) / 60, 145, accuracy: 0.5)
+    }
+
+    /// Wrapping past midnight is the whole point of `22:00-06:00`.
+    func testTransitionWrapsIntoTomorrow() {
+        var t = Tariff()
+        t.mode = .peakOffPeak
+        t.offPeakWindows = Tariff.parseWindows("22:00-06:00")!
+
+        let from = date(10, 23, 0)
+        guard let next = t.nextTransition(from: from, calendar: paris) else {
+            return XCTFail("expected tomorrow 06:00")
+        }
+        XCTAssertEqual(paris.dateComponents([.day], from: next).day, 11)
+        XCTAssertEqual(next.timeIntervalSince(from) / 60, 420, accuracy: 0.5)
+    }
+
+    /// Guard against the default `.current` creeping back in: the same instant with a
+    /// different calendar must give a different answer, because boundaries are local.
+    func testTransitionsHonourTheCalendarTheyAreGiven() {
+        var t = Tariff()
+        t.mode = .peakOffPeak
+        t.offPeakWindows = Tariff.parseWindows("22:00-06:00")!
+        let from = date(10, 10, 0)
+
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "Etc/UTC")!
+
+        let inParis = t.nextTransition(from: from, calendar: paris)
+        let inUTC = t.nextTransition(from: from, calendar: utc)
+        XCTAssertNotNil(inParis); XCTAssertNotNil(inUTC)
+        XCTAssertNotEqual(inParis, inUTC, "boundaries are local, so the calendar must matter")
+    }
+
+    // MARK: Window parsing edges
+
+    /// `06:00-06:00` would wrap and cover every minute of the day, so a typo turns the
+    /// whole day off-peak and quietly halves what the panel says the day cost.
+    func testZeroLengthWindowIsRejected() {
+        XCTAssertNil(TariffWindow(text: "06:00-06:00"))
+        XCTAssertNil(TariffWindow(text: "00:00-00:00"))
+        XCTAssertNil(Tariff.parseWindows("06:00-06:00"))
+        XCTAssertNil(Tariff.parseWindows("22:00-06:00, 06:00-06:00"),
+                     "one unreadable entry rejects the whole schedule, never a silent subset")
+    }
+
+    /// Night windows are written "22:00-24:00" on a real contract. Rejecting it made the
+    /// normal way of saying "until midnight" an error.
+    func testWindowMayEndAtMidnightWrittenAs2400() {
+        let w = try? XCTUnwrap(TariffWindow(text: "22:00-24:00"))
+        guard let w else { return XCTFail("22:00-24:00 should parse") }
+        XCTAssertTrue(w.contains(23 * 60 + 59))
+        XCTAssertFalse(w.contains(0), "the end minute is exclusive, so midnight is already peak")
+        XCTAssertEqual(w.text, "22:00-24:00", "it must round-trip to what the user typed")
     }
 
     // MARK: Money formatting
