@@ -1,10 +1,11 @@
 .PHONY: all setup build build-release test run open run-release clean install uninstall xcode \
 	build-verbose release guard-clean guard-publish help
 
-# Recipes below pipe xcodebuild through filters and check exit codes. Without
-# pipefail, `xcodebuild ... | tail` reports the status of tail, so a build or test
-# failure can look like success. bash is named explicitly because /bin/sh on
-# some hosts is dash, which has no pipefail.
+# Recipes below pipe xcodebuild through filters and check exit codes. pipefail is
+# asked for here because GNU make >= 3.82 (and Homebrew make) honour .SHELLFLAGS;
+# Apple's /usr/bin/make is a 3.81 that ignores it outright, measured by watching the
+# shell get invoked as `-c <recipe>`. Every recipe in this file that could therefore
+# swallow a status captures it explicitly instead of relying on this line.
 SHELL := /bin/bash
 .SHELLFLAGS = -o pipefail -c
 
@@ -159,6 +160,14 @@ release: guard-publish build-release
 			echo "add the tap as a submodule or a gitlink if \`make release\` should update it."; \
 		fi
 
+# xcodebuild buries the verdict in a wall of log, so the tail is what a human reads.
+# The exit status has to survive that on purpose: Apple's /usr/bin/make (GNU Make
+# 3.81, "built for i386-apple-darwin11.3.0") ignores .SHELLFLAGS and invokes the
+# shell as `-c <recipe>` — measured, it drops `-o pipefail` — so a piped recipe
+# would report tail's status and exit 0 on a red suite. Captured by hand instead.
+# TEST_FILTER is overridable so a CI job can prove the zero-test guard below works.
+TEST_FILTER ?= $(PROJECT_NAME)Tests
+
 test: setup
 	@echo "Running tests..."
 	@mkdir -p $(BUILD_DIR)
@@ -167,8 +176,21 @@ test: setup
 		-configuration Debug \
 		-derivedDataPath $(DERIVED_DATA) \
 		-destination "platform=macOS,arch=arm64" \
-		-only-testing:$(PROJECT_NAME)Tests \
-		test 2>&1 | tail -30
+		-only-testing:$(TEST_FILTER) \
+		test > $(BUILD_DIR)/test.log 2>&1; \
+	status=$$?; \
+	tail -n 30 $(BUILD_DIR)/test.log; \
+	if [ $$status -ne 0 ]; then \
+		echo "test: xcodebuild exited $$status - full log at $(BUILD_DIR)/test.log"; \
+		exit $$status; \
+	fi; \
+	ran=$$(grep -Eo 'Executed [0-9]+ tests' $(BUILD_DIR)/test.log | head -1 | awk '{print $$2}'); \
+	if [ "$${ran:-0}" -eq 0 ]; then \
+		echo "test: 0 tests executed. -only-testing:$(TEST_FILTER) matched nothing,"; \
+		echo "       and xcodebuild reports that as TEST SUCCEEDED with exit 0."; \
+		exit 1; \
+	fi; \
+	echo "test: $$ran test(s) executed, all green"
 
 run: build
 	@$(EXECUTABLE)
