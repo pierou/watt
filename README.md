@@ -47,6 +47,13 @@ make release REMOTE=origin
 
 Building a release binary without publishing anything is `make build-release`.
 
+### Working from a fork
+
+Fork of [`ZimengXiong/watt`](https://github.com/zimengxiong/watt). If you are carrying your own
+commits on top — here or anywhere — [FORK.md](FORK.md) is the contract that keeps upstream
+mergeable: where branches start, what may be force-pushed, and how to sync. It is worth reading
+before you open your first PR against this repository.
+
 ### CPU/GPU/ANE Metrics
 
 On first launch, Watt prompts to install a system service that runs Apple's `powermetrics` tool. This provides accurate hardware metrics that aren't available through standard APIs. The service:
